@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -22,6 +23,8 @@ func main() {
 		log.Fatalf("Failed to create output file: %v", err)
 	}
 	defer outFile.Close()
+	writer := bufio.NewWriter(outFile)
+	defer writer.Flush()
 
 	reader := csv.NewReader(file)
 	reader.FieldsPerRecord = -1
@@ -46,7 +49,11 @@ func main() {
 		// TODO: handle if there are missing/unexpected data all over
 		switch recordType {
 		case "100":
-			// TODO: confirm that it is nem12. return if not
+			if record[1] != "NEM12" {
+				err := fmt.Errorf("file is not in NEM12 format")
+				fmt.Println(err)
+				return
+			}
 		case "200":
 			nmi = record[1]
 			intervalPeriod, err = strconv.Atoi(record[8])
@@ -64,18 +71,16 @@ func main() {
 				reading := record[i]
 
 				readingFloat, _ := strconv.ParseFloat(reading, 64)
-				timestamp := date.Add(time.Duration((i-2)*intervalPeriod) * time.Minute)
-				fmt.Fprintf(outFile, "INSERT INTO meter_readings (nmi, timestamp, consumption) VALUES ('%s', '%s', %v);\n",
+				timestamp := date.Add(time.Duration((i-1)*intervalPeriod) * time.Minute)
+				fmt.Fprintf(writer, "INSERT INTO meter_readings (nmi, timestamp, consumption) VALUES ('%s', '%s', %v);\n",
 					nmi,
 					timestamp.Format("2006-01-02 15:04:05"),
 					readingFloat)
 			}
 		case "400":
 		case "500":
-			nmi = ""
-			intervals = 0
-			intervalPeriod = 0
-
+		case "900":
+			fmt.Println("End of data")
 		}
 	}
 

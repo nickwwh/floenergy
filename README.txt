@@ -11,3 +11,6 @@ General idea
 * each 300 lines is probably for a day
 * no mention of 400 records but it is mainly to indicate the reason behind less than perfect meter readings in the 300 records
 
+# tech used
+
+bufio. Ensures minimal footprint when reading large csv
