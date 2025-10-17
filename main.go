@@ -13,6 +13,14 @@ import (
 	"time"
 )
 
+type meterReading struct {
+	nmi       string
+	timestamp string
+	reading   float64
+}
+
+const batchSize = 50
+
 func main() {
 	inPath := flag.String("in", "resources/test/data/sample.csv", "Path to input NEM12 CSV inputFile")
 	outPath := flag.String("out", "output/output.sql", "Path to write generated SQL inserts")
@@ -47,6 +55,7 @@ func main() {
 	nmi := ""
 	intervals := 0
 	intervalPeriod := 0
+	var tempSlice []meterReading
 	for {
 		record, err := reader.Read()
 		lineNum++
@@ -97,12 +106,12 @@ func main() {
 					log.Fatalf("Error parsing reading value %s at line %d: %v", reading, lineNum, err)
 				}
 				timestamp := date.Add(time.Duration((i-1)*intervalPeriod) * time.Minute)
-				_, err = fmt.Fprintf(writer, "INSERT INTO meter_readings (nmi, timestamp, consumption) VALUES ('%s', '%s', %v);\n",
-					nmi,
-					timestamp.Format("2006-01-02 15:04:05"),
-					readingFloat)
-				if err != nil {
-					log.Fatalf("Error writing to inputFile: %v", err)
+
+				tempSlice = append(tempSlice, meterReading{nmi, timestamp.Format("2006-01-02 15:04:05"), readingFloat})
+
+				if len(tempSlice) == batchSize {
+					flushOutputSliceToFile(tempSlice, writer)
+					tempSlice = []meterReading{}
 				}
 			}
 		case "400":
@@ -113,5 +122,40 @@ func main() {
 		}
 	}
 
+	// write any remaining records
+	flushOutputSliceToFile(tempSlice, writer)
+
 	slog.Info(fmt.Sprintf("Total lines processed: %d", lineNum))
+}
+
+func flushOutputSliceToFile(tempSlice []meterReading, writer *bufio.Writer) {
+	outputFileErrorMsg := "Error writing to outputFile: %v"
+
+	_, err := fmt.Fprintf(writer, "INSERT INTO meter_readings (nmi, timestamp, consumption) VALUES \n")
+	if err != nil {
+		log.Fatalf(outputFileErrorMsg, err)
+	}
+
+	for i, reading := range tempSlice {
+		_, err = fmt.Fprintf(writer, "('%s', '%s', %v)",
+			reading.nmi,
+			reading.timestamp,
+			reading.reading)
+		if err != nil {
+			log.Fatalf(outputFileErrorMsg, err)
+		}
+
+		if i < len(tempSlice)-1 {
+			_, err = fmt.Fprintf(writer, ",\n")
+			if err != nil {
+				log.Fatalf(outputFileErrorMsg, err)
+			}
+		} else {
+			_, err = fmt.Fprintf(writer, ";\n")
+			if err != nil {
+				log.Fatalf(outputFileErrorMsg, err)
+			}
+		}
+	}
+	tempSlice = []meterReading{}
 }
