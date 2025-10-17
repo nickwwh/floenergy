@@ -25,8 +25,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open inputFile: %v", err)
 	}
-	outFile, err := os.Create(*outPath)
-	//outFile, err := os.OpenFile(*outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	//outFile, err := os.Create(*outPath)
+	outFile, err := os.OpenFile(*outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		log.Fatalf("Failed to create output inputFile: %v", err)
 	}
