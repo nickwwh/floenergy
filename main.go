@@ -3,30 +3,44 @@ package main
 import (
 	"bufio"
 	"encoding/csv"
+	"flag"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
 )
 
 func main() {
-	file, err := os.Open("sample.csv")
-	if err != nil {
-		log.Fatalf("Failed to open file: %v", err)
-	}
-	defer file.Close()
+	inPath := flag.String("in", "resources/test/data/sample.csv", "Path to input NEM12 CSV inputFile")
+	outPath := flag.String("out", "output/output.sql", "Path to write generated SQL inserts")
+	flag.Parse()
 
-	outFile, err := os.Create("output.sql")
+	inputFile, err := os.Open(*inPath)
 	if err != nil {
-		log.Fatalf("Failed to create output file: %v", err)
+		log.Fatalf("Failed to open inputFile: %v", err)
 	}
-	defer outFile.Close()
+	outFile, err := os.OpenFile(*outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		log.Fatalf("Failed to create output inputFile: %v", err)
+	}
 	writer := bufio.NewWriter(outFile)
-	defer writer.Flush()
+	defer func(inputFile *os.File, writer *bufio.Writer, outFile *os.File) {
+		if err := inputFile.Close(); err != nil {
+			log.Fatalf("Failed to close inputFile: %v", err)
+		}
+		if err := writer.Flush(); err != nil {
+			log.Fatalf("Failed to flush output inputFile: %v", err)
+		}
+		if err := outFile.Close(); err != nil {
+			log.Fatalf("Failed to close output inputFile: %v", err)
+		}
 
-	reader := csv.NewReader(file)
+	}(inputFile, writer, outFile)
+
+	reader := csv.NewReader(inputFile)
 	reader.FieldsPerRecord = -1
 
 	lineNum := 0
@@ -35,26 +49,30 @@ func main() {
 	intervalPeriod := 0
 	for {
 		record, err := reader.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Fatalf("Error reading line %d: %v", lineNum, err)
-		}
-
 		lineNum++
 
-		recordType := record[0]
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			slog.Error("Error reading line %d: %v", lineNum, err)
+			continue
+		}
+		if len(record) == 0 {
+			slog.Warn("Empty record at line %d", lineNum)
+			continue
+		}
 
-		// TODO: handle if there are missing/unexpected data all over
+		recordType := record[0]
 		switch recordType {
 		case "100":
 			if record[1] != "NEM12" {
-				err := fmt.Errorf("file is not in NEM12 format")
-				fmt.Println(err)
-				return
+				log.Fatal("inputFile is not in NEM12 format")
 			}
 		case "200":
+			if len(record) < 8 {
+				log.Fatalf("Record %d is too short: %d columns", lineNum, len(record))
+			}
 			nmi = record[1]
 			intervalPeriod, err = strconv.Atoi(record[8])
 			if err != nil {
@@ -62,27 +80,38 @@ func main() {
 			}
 			intervals = 1440 / intervalPeriod
 		case "300":
-			date, err := time.Parse("20060102", record[1])
-			if err != nil {
-				return
+			if len(record) < intervals+2 {
+				log.Fatalf("Record too short, expected %d values but got %d", intervals+2, len(record))
 			}
 
-			for i := 2; i < intervals+1; i++ {
-				reading := record[i]
+			date, err := time.Parse("20060102", record[1])
+			if err != nil {
+				log.Fatalf("Error parsing date %s at line %d: %v", record[1], lineNum, err)
+			}
 
-				readingFloat, _ := strconv.ParseFloat(reading, 64)
+			// iterate through the intervals for that date
+			for i := 2; i <= intervals+1; i++ {
+				reading := record[i]
+				readingFloat, err := strconv.ParseFloat(reading, 64)
+				if err != nil {
+					log.Fatalf("Error parsing reading value %s at line %d: %v", reading, lineNum, err)
+				}
 				timestamp := date.Add(time.Duration((i-1)*intervalPeriod) * time.Minute)
-				fmt.Fprintf(writer, "INSERT INTO meter_readings (nmi, timestamp, consumption) VALUES ('%s', '%s', %v);\n",
+				_, err = fmt.Fprintf(writer, "INSERT INTO meter_readings (nmi, timestamp, consumption) VALUES ('%s', '%s', %v);\n",
 					nmi,
 					timestamp.Format("2006-01-02 15:04:05"),
 					readingFloat)
+				if err != nil {
+					log.Fatalf("Error writing to inputFile: %v", err)
+				}
 			}
 		case "400":
+			// not part of the scope but ideally included to indicate where reading quality is less than ideal
 		case "500":
 		case "900":
-			fmt.Println("End of data")
+			slog.Debug("End of data")
 		}
 	}
 
-	fmt.Printf("\nTotal lines processed: %d\n", lineNum)
+	slog.Info(fmt.Sprintf("Total lines processed: %d", lineNum))
 }
